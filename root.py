@@ -15,7 +15,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Callable
-from urllib.parse import urljoin
+from urllib.parse import quote, unquote, urljoin
 
 VERSION = "1.0.0"
 BASE_DIR = Path(__file__).resolve().parent
@@ -83,11 +83,18 @@ def _latest_rootfs_url(image: str, architecture: str) -> str:
         image = _latest_alpine_image()
     directory_url = f"https://images.linuxcontainers.org/images/{image}/{architecture}/default/"
     page = _http_text(directory_url)
-    timestamps = re.findall(r'href=["\'](\d{8}_\d{4})/["\']', page)
+    build_links = re.findall(r"href=['\"]([^/'\"]+)/['\"]", page)
+    timestamps = sorted(
+        {
+            unquote(link)
+            for link in build_links
+            if re.fullmatch(r"\d{8}_\d{2}:?\d{2}", unquote(link))
+        }
+    )
     if not timestamps:
         raise RuntimeError(f"No image builds are listed for {image} on {architecture}")
-    latest = max(timestamps)
-    return urljoin(directory_url, f"{latest}/rootfs.tar.xz")
+    latest = timestamps[-1]
+    return urljoin(directory_url, f"{quote(latest, safe='_')}/rootfs.tar.xz")
 
 
 def _download(url: str, destination: Path, progress_cb: Callable[[str], None] | None) -> None:

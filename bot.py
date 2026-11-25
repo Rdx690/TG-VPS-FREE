@@ -851,6 +851,8 @@ def main() -> None:
         level=os.environ.get("LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     token = os.environ.get("BOT_TOKEN", "").strip()
     if not token:
         raise SystemExit("BOT_TOKEN is required. Copy .env.example to .env and configure it.")
