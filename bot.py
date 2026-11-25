@@ -45,6 +45,7 @@ SSHX_CACHE: dict[int, tuple[str, float]] = {}
 SSHX_PROCESSES: dict[int, subprocess.Popen[bytes]] = {}
 SSHX_LOGS: dict[int, Path] = {}
 SSHX_LOCKS: dict[int, asyncio.Lock] = {}
+SSHX_INSTALL_LOCK = threading.Lock()
 JOIN_CACHE_SECONDS = 300
 SSHX_CACHE_SECONDS = 600
 STATE_TTL_SECONDS = 600
@@ -484,26 +485,26 @@ def _terminate_sshx(uid: int) -> None:
 
 
 def _install_sshx_binary() -> str:
-    """Install SSHX with the official installer if it is not already on PATH."""
-    existing = shutil.which("sshx")
-    if existing:
-        return existing
-    curl = shutil.which("curl")
-    if curl is None:
-        raise RuntimeError("curl is not installed on the host")
-    result = subprocess.run(
-        ["sh", "-c", f"{curl} -sSf https://sshx.io/get | sh"],
-        cwd=BASE_DIR, capture_output=True, text=True, timeout=180,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"SSHX installer failed: {result.stderr[-1000:]}")
-    binary = shutil.which("sshx")
-    if binary is None:
-        candidate = Path.home() / ".local" / "bin" / "sshx"
-        binary = str(candidate) if candidate.is_file() else None
-    if binary is None:
-        raise RuntimeError("SSHX installer completed, but the sshx executable was not found")
-    return binary
+    """Install SSHX into the bot user's home directory without requiring sudo."""
+    with SSHX_INSTALL_LOCK:
+        existing = shutil.which("sshx")
+        if existing:
+            return existing
+        curl = shutil.which("curl")
+        if curl is None:
+            raise RuntimeError("curl is not installed on the host")
+        install_dir = Path.home() / ".local" / "bin"
+        install_dir.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            ["sh", "-c", f"{curl} -sSf https://sshx.io/get | sh -s download"],
+            cwd=install_dir, capture_output=True, text=True, timeout=180,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"SSHX installer failed: {result.stderr[-1000:]}")
+        candidate = install_dir / "sshx"
+        if not candidate.is_file():
+            raise RuntimeError("SSHX installer completed, but the sshx executable was not found")
+        return str(candidate)
 
 
 def _spawn_sshx(uid: int) -> tuple[str, str]:
