@@ -12,8 +12,10 @@ import shlex
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +50,41 @@ SSHX_CACHE_SECONDS = 600
 STATE_TTL_SECONDS = 600
 TELEGRAM_TEXT_LIMIT = 3900
 SSHX_LINK_RE = re.compile(r"https://sshx\.io/s/[A-Za-z0-9#]+")
+
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    """Serve minimal health responses for Render's web-service port check."""
+
+    def _respond(self, include_body: bool = True) -> None:
+        if self.path not in {"/", "/healthz"}:
+            self.send_error(404)
+            return
+        body = b'{"status":"ok"}\n'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if include_body:
+            self.wfile.write(body)
+
+    def do_GET(self) -> None:
+        self._respond()
+
+    def do_HEAD(self) -> None:
+        self._respond(include_body=False)
+
+    def log_message(self, format: str, *args: Any) -> None:
+        del format, args
+
+
+def _start_health_server() -> ThreadingHTTPServer:
+    """Bind the HTTP port Render requires while Telegram polling runs."""
+    port = _env_int("PORT", 10000)
+    server = ThreadingHTTPServer(("0.0.0.0", port), _HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, name="health-server", daemon=True)
+    thread.start()
+    LOGGER.info("Health endpoint listening on port %s", port)
+    return server
 
 
 def _env_int(name: str, default: int = 0) -> int:
@@ -868,10 +905,14 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.ALL, text_handler))
     application.add_error_handler(error_handler)
     LOGGER.info("Starting SOURAJITVFX VPS bot version %s", VERSION)
+    health_server = _start_health_server()
     try:
         application.run_polling(allowed_updates=Update.ALL_TYPES, close_loop=False)
     except KeyboardInterrupt:
         LOGGER.info("Bot stopped by signal or keyboard interrupt")
+    finally:
+        health_server.shutdown()
+        health_server.server_close()
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
